@@ -107,7 +107,8 @@ Four algorithms were tested, along with an ensemble model based on all four:
 * Boosting
 * Linear Discriminant Analysis
  
-The accuracy of each of the predictors on the validation set is set out below.
+The out-of-sample accuracy of each of the predictors when cross-validated using the validation set is set out below.
+
 
 ```{r modelfit, message=FALSE, echo=FALSE, warning=FALSE, include=FALSE, results=FALSE, cache=TRUE, cache.lazy=FALSE}
 
@@ -178,9 +179,11 @@ kable(results, caption="Accuracy of algorithms as tested on the validation set")
 
 ```
 
+
 The random forest produces very accurate predictions (99.6% accurate) and the other algorithms do not add any further insight in the ensemble model. Therefore the random forest predictor will be used.
 
 Applying this to the test set gives the following results:
+
 
 ```{r check, message=FALSE, echo=FALSE, warning=FALSE}
 
