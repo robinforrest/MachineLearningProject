@@ -1,0 +1,196 @@
+---
+title: "Exercise Recognition from Wearable Device Data"
+author: "Rob Forrest"
+date: "01/12/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyr)
+library(caret)
+library(corrplot)
+library(doParallel)
+library(knitr)
+```
+
+```{r importdata, include=FALSE}
+setwd("F:/Studying/Data Science/JHU Data Science/08 Machine Learning/Project/MachineLearningProject")
+trainingraw <- read.csv("pml-training.csv")
+testingraw <- read.csv("pml-testing.csv")
+training <- trainingraw
+testing <- testingraw
+
+```
+
+## Intro
+
+This analysis aims to predict the manner in which barbell lifts were performed based on data collected from wearable devices. Five algorithms have been tested to find the one that performed best on a validation dataset:
+
+* Decision tree
+* Random forest
+* Gradient boosting
+* Linear discriminant analysis
+* An ensemble of the three
+
+The link provided to the metadata is broken and attempts to find the metadata elsewhere have been fruitless, so we must work with the limited information provided in the project description.
+
+From this information we know that the manner in which the barbell lifts were performed is contained in the 'classe' variable, with five levels: A, B, C, D, E.
+
+We have data from wearable devices on the belt, arm, dumbell and forearm. For each device we have measures of roll, pitch, yaw, and total acceleration, as well as measurements on three axes for "accel", "gyros" and "magnet", which we can safely assume to be accelerometer, gyroscope and magnetometer.
+
+Without the metadata it is difficult to determine the likely usefulness of these fields, but other information available online suggests that roll, pitch, yaw and total acceleration are the measurements of interest, with the 3-axis "accel", "gyros" and "magnet" measurements being the less processed data from which the measurements of interest are calculated. The correlation between each device's roll/pitch/yaw/total measurements and the accel/gyros/magnet measurements will be checked, and if they are highly correlated as expected then only roll/pitch/yaw/total will be retained.
+
+Some records have further statistical measure for each device (kurtosis, skewness, standard deviation etc). But these are only available for 406 of the 19622 training observations, and none of the testing observations, so they will not be used for this analysis.
+
+## Data Cleaning
+
+Removing unnecessary fields as described above leaves 52 measurement variables in addition to the 'classe' variable, 13 for each device.
+
+```{r cleandata, include=FALSE}
+training <- training[,grepl('^roll', names(training)) | grepl('^pitch', names(training)) | grepl('^yaw', names(training)) | grepl('^total_accel', names(training)) |
+                       grepl('^gyros', names(training)) | grepl('^accel', names(training)) | grepl('^magnet', names(training)) | grepl('^classe', names(training))]
+
+testing <- testing[,grepl('^roll', names(testing)) | grepl('^pitch', names(testing)) | grepl('^yaw', names(testing)) | grepl('^total_accel', names(testing)) |
+                       grepl('^gyros', names(testing)) | grepl('^accel', names(testing)) | grepl('^magnet', names(testing)) | grepl('^classe', names(testing))]
+
+```
+
+A validation set was split from the training data to allow testing of multiple models before the final selected model is checked with the test set. The validation set took 10% of the training set, leaving a total of 17,658 records in the training set, 1,964 in the validation set and 20 in the testing set.
+
+```{r splitvalidation, include=FALSE}
+set.seed(12345)
+inValid <- createDataPartition(y=training$classe, p=0.1, list=FALSE)
+validation <- training[inValid,]
+training <- training[-inValid,]
+
+```
+
+Looking at correlations within the dataset, there is not as much correlation between roll/pitch/yaw/total and the other measurements might be expected given that they are derived from them. Only the correlations between forearm measurements are shown here, but measurements from the other devices showed a similar degree of correlation. This is likely because we are dealing with angular motion, so roll/pitch/yaw/total are not linear combinations of the raw measurements. There may therefore be value in their inclusion.
+
+```{r checkcorrelation, message=FALSE, echo=FALSE, warning=FALSE, results=FALSE}
+source("http://www.sthda.com/upload/rquery_cormat.r")
+
+training_belt <- training[,grepl('belt', names(training))]
+#rquery.cormat((training_belt))[4]
+
+training_dumbbell <- training[,grepl('dumbbell', names(training))]
+#rquery.cormat((training_dumbbell))[4]
+
+training_arm <- training[,grepl('arm', names(training))]
+#rquery.cormat((training_arm))[4]
+
+training_forearm <- training[,grepl('forearm', names(training))]
+rquery.cormat((training_forearm))[4]
+
+
+```
+
+Finally the 'classe' variable was converted to a factor for all datasets.
+
+```{r factors, message=FALSE, echo=FALSE, warning=FALSE, results=FALSE}
+
+training$classe <- as.factor(training$classe)
+validation$classe <- as.factor(validation$classe)
+
+
+```
+
+
+## Model Fitting
+
+Four algorithms were tested, along with an ensemble model based on all four:
+
+* Decision Tree
+* Random Forest
+* Boosting
+* Linear Discriminant Analysis
+ 
+The accuracy of each of the predictors on the validation set is set out below.
+
+```{r modelfit, message=FALSE, echo=FALSE, warning=FALSE, include=FALSE, results=FALSE, cache=TRUE, cache.lazy=FALSE}
+
+cl <- makePSOCKcluster(3)
+registerDoParallel(cl)
+
+decisiontreefit <- train(classe ~., method='rpart', data=training)
+decisiontreepred <- predict(decisiontreefit, validation)
+
+confusionMatrix(decisiontreepred, validation$classe)
+
+
+randomforestfit <- train(classe ~., method='rf', prox=TRUE, data=training)
+randomforestpred <- predict(randomforestfit, validation)
+
+confusionMatrix(randomforestpred, validation$classe)
+
+
+boostingfit <- train(classe ~., method='gbm', verbose=FALSE, data=training)
+boostingpred <- predict(boostingfit, validation)
+
+confusionMatrix(boostingpred, validation$classe)
+
+
+ldafit <- train(classe ~., method='lda', data=training)
+ldapred <- predict(ldafit, validation)
+
+confusionMatrix(ldapred, validation$classe)
+
+
+
+
+
+decisiontreetrainingpred <- predict(decisiontreefit, training)
+randomforesttrainingpred <- predict(randomforestfit, training)
+boostingtrainingpred <- predict(boostingfit, training)
+ldatrainingpred <- predict(ldafit, training)
+
+
+stackingdatatraining <- data.frame(decisiontreetrainingpred, randomforesttrainingpred, boostingtrainingpred, ldatrainingpred, classe=training$classe)
+stackingdatatesting <- data.frame(decisiontreepred, randomforestpred, boostingpred, ldapred, classe=validation$classe)
+names(stackingdatatesting) <- names(stackingdatatraining)
+
+stackfit <- train(classe~., data=stackingdatatraining, method='rf', prox=TRUE)
+
+stackpred <- predict(stackfit, stackingdatatesting)
+
+confusionMatrix(stackpred, validation$classe)
+
+stopCluster(cl)
+
+```
+
+```{r modelresults, message=FALSE, echo=FALSE, warning=FALSE}
+
+ModelType <- c("Decision Tree","Random Forest","Boosting","Linear Discriminant","Ensemble")
+Accuracy <- c(confusionMatrix(decisiontreepred, validation$classe)$overall['Accuracy'],
+              confusionMatrix(randomforestpred, validation$classe)$overall['Accuracy'],
+              confusionMatrix(boostingpred, validation$classe)$overall['Accuracy'],
+              confusionMatrix(ldapred, validation$classe)$overall['Accuracy'],
+              confusionMatrix(stackpred, validation$classe)$overall['Accuracy'])
+Accuracy <- round(Accuracy,3)
+
+
+results <- data.frame(ModelType,Accuracy)
+
+kable(results, caption="Accuracy of algorithms as tested on the validation set")
+
+```
+
+The random forest produces very accurate predictions (99.6% accurate) and the other algorithms do not add any further insight in the ensemble model. Therefore the random forest predictor will be used.
+
+Applying this to the test set gives the following results:
+
+```{r check, message=FALSE, echo=FALSE, warning=FALSE}
+
+Prediction <- predict(randomforestfit, testing)
+TestingDataPoint <- seq(1,length(Prediction),1)
+
+
+predictiontable <- data.frame(TestingDataPoint,Prediction)
+
+kable(predictiontable, caption="Predictions for the test set")
+
+
+```
